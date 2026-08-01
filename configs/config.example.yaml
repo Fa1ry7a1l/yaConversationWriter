@@ -1,0 +1,38 @@
+app:
+  shutdown_timeout: 10s
+
+# Telegram listeners are wired in a later increment. Keep them disabled until then.
+listeners:
+  - name: primary
+    type: telegram
+    enabled: false
+    token_env: TELEGRAM_BOT_TOKEN
+
+workers:
+  count: 2
+  queue_size: 32
+  task_timeout: 2m
+
+storage:
+  provider: memory
+
+speech:
+  provider: mock
+  mock:
+    transcript: "Prepared mock transcript"
+    delay: 0s
+    error: ""
+
+llm:
+  provider: mock
+  mock:
+    summary: "Prepared mock summary"
+    answer: "Prepared mock answer"
+    summary_delay: 0s
+    answer_delay: 0s
+    summary_error: ""
+    answer_error: ""
+
+logging:
+  level: info
+  format: text
