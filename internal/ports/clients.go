@@ -33,8 +33,14 @@ type LLMClient interface {
 	Answer(ctx context.Context, request AnswerRequest) (string, error)
 }
 
-// JobDispatcher is consumed by the future upload use case and implemented by
-// the bounded worker pool. It deliberately exposes no worker implementation details.
+type ProcessingTask struct {
+	UserID    domain.UserID
+	MeetingID domain.MeetingID
+	Audio     AudioInput
+}
+
+// JobDispatcher is consumed by the upload use case and implemented by the
+// bounded worker pool. It deliberately exposes no worker implementation details.
 type JobDispatcher interface {
-	Enqueue(ctx context.Context, userID domain.UserID, meetingID domain.MeetingID) error
+	Enqueue(ctx context.Context, task ProcessingTask) error
 }

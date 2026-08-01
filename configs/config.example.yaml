@@ -15,6 +15,16 @@ workers:
 
 storage:
   provider: memory
+  postgres:
+    host: localhost
+    port: 5432
+    database: meeting_notes
+    user: meeting_notes
+    password_env: POSTGRES_PASSWORD
+    ssl_mode: disable
+    min_connections: 0
+    max_connections: 10
+    connect_timeout: 5s
 
 speech:
   provider: mock

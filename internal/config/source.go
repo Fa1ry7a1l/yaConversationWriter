@@ -81,5 +81,17 @@ func (c *Config) resolveSecrets(lookup EnvLookup) error {
 		}
 		listener.Token = value
 	}
+
+	if c.Storage.Provider == ProviderPostgres {
+		key := strings.TrimSpace(c.Storage.Postgres.PasswordEnv)
+		if key == "" {
+			return errors.New("storage.postgres.password_env is required")
+		}
+		value, ok := lookup(key)
+		if !ok || value == "" {
+			return fmt.Errorf("storage.postgres: required environment variable %q is missing or empty", key)
+		}
+		c.Storage.Postgres.Password = value
+	}
 	return nil
 }

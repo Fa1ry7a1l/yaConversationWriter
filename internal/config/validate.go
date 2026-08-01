@@ -41,8 +41,41 @@ func (c Config) Validate() error {
 		}
 	}
 
-	if c.Storage.Provider != ProviderMemory {
+	if c.Storage.Provider != ProviderMemory && c.Storage.Provider != ProviderPostgres {
 		errs = append(errs, fmt.Errorf("storage.provider %q is not supported", c.Storage.Provider))
+	}
+	if c.Storage.Provider == ProviderPostgres {
+		postgres := c.Storage.Postgres
+		if strings.TrimSpace(postgres.Host) == "" {
+			errs = append(errs, errors.New("storage.postgres.host is required"))
+		}
+		if postgres.Port == 0 {
+			errs = append(errs, errors.New("storage.postgres.port must be greater than zero"))
+		}
+		if strings.TrimSpace(postgres.Database) == "" {
+			errs = append(errs, errors.New("storage.postgres.database is required"))
+		}
+		if strings.TrimSpace(postgres.User) == "" {
+			errs = append(errs, errors.New("storage.postgres.user is required"))
+		}
+		if postgres.Password == "" {
+			errs = append(errs, errors.New("storage.postgres password is required"))
+		}
+		if strings.TrimSpace(postgres.SSLMode) == "" {
+			errs = append(errs, errors.New("storage.postgres.ssl_mode is required"))
+		}
+		if postgres.MinConnections < 0 {
+			errs = append(errs, errors.New("storage.postgres.min_connections must not be negative"))
+		}
+		if postgres.MaxConnections <= 0 {
+			errs = append(errs, errors.New("storage.postgres.max_connections must be greater than zero"))
+		}
+		if postgres.MinConnections > postgres.MaxConnections {
+			errs = append(errs, errors.New("storage.postgres.min_connections must not exceed max_connections"))
+		}
+		if postgres.ConnectTimeout <= 0 {
+			errs = append(errs, errors.New("storage.postgres.connect_timeout must be greater than zero"))
+		}
 	}
 	if c.Speech.Provider != ProviderMock {
 		errs = append(errs, fmt.Errorf("speech.provider %q is not supported", c.Speech.Provider))

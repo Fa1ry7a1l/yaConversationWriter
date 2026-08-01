@@ -8,6 +8,8 @@ import (
 	llmfactory "yaConversationWriter/internal/infrastructure/llm"
 	repositoryfactory "yaConversationWriter/internal/infrastructure/repository"
 	speechfactory "yaConversationWriter/internal/infrastructure/speech"
+	"yaConversationWriter/internal/service"
+	"yaConversationWriter/internal/worker"
 )
 
 func Build(cfg config.Config, logger *slog.Logger) (*App, error) {
@@ -15,7 +17,7 @@ func Build(cfg config.Config, logger *slog.Logger) (*App, error) {
 		return nil, fmt.Errorf("validate configuration: %w", err)
 	}
 
-	repository, err := repositoryfactory.New(cfg.Storage)
+	repository, storageLifecycle, err := repositoryfactory.New(cfg.Storage, logger)
 	if err != nil {
 		return nil, fmt.Errorf("build repository: %w", err)
 	}
@@ -27,6 +29,22 @@ func Build(cfg config.Config, logger *slog.Logger) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build LLM client: %w", err)
 	}
+	processor, err := service.NewProcessor(repository, speechClient, llmClient, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build meeting processor: %w", err)
+	}
+	workers, err := worker.New(worker.Config{
+		Count:       cfg.Workers.Count,
+		QueueSize:   cfg.Workers.QueueSize,
+		TaskTimeout: cfg.Workers.TaskTimeout,
+	}, processor, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build worker pool: %w", err)
+	}
+	meetingApplication, err := service.NewMeetings(repository, llmClient, workers, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build meeting application: %w", err)
+	}
 
 	for _, listener := range cfg.Listeners {
 		if listener.Enabled {
@@ -35,8 +53,10 @@ func Build(cfg config.Config, logger *slog.Logger) (*App, error) {
 	}
 
 	return New(logger, cfg.App.ShutdownTimeout, Dependencies{
-		Repository: repository,
-		Speech:     speechClient,
-		LLM:        llmClient,
+		Repository:  repository,
+		Speech:      speechClient,
+		LLM:         llmClient,
+		Application: meetingApplication,
+		Background:  []Lifecycle{storageLifecycle, workers},
 	})
 }

@@ -5,6 +5,7 @@ import "time"
 const (
 	ListenerTelegram = "telegram"
 	ProviderMemory   = "memory"
+	ProviderPostgres = "postgres"
 	ProviderMock     = "mock"
 )
 
@@ -37,7 +38,21 @@ type Workers struct {
 }
 
 type Storage struct {
-	Provider string `yaml:"provider"`
+	Provider string   `yaml:"provider"`
+	Postgres Postgres `yaml:"postgres"`
+}
+
+type Postgres struct {
+	Host           string        `yaml:"host"`
+	Port           uint16        `yaml:"port"`
+	Database       string        `yaml:"database"`
+	User           string        `yaml:"user"`
+	PasswordEnv    string        `yaml:"password_env"`
+	Password       string        `yaml:"-"`
+	SSLMode        string        `yaml:"ssl_mode"`
+	MinConnections int32         `yaml:"min_connections"`
+	MaxConnections int32         `yaml:"max_connections"`
+	ConnectTimeout time.Duration `yaml:"connect_timeout"`
 }
 
 type Speech struct {
@@ -78,7 +93,20 @@ func Default() Config {
 			QueueSize:   32,
 			TaskTimeout: 2 * time.Minute,
 		},
-		Storage: Storage{Provider: ProviderMemory},
+		Storage: Storage{
+			Provider: ProviderMemory,
+			Postgres: Postgres{
+				Host:           "localhost",
+				Port:           5432,
+				Database:       "meeting_notes",
+				User:           "meeting_notes",
+				PasswordEnv:    "POSTGRES_PASSWORD",
+				SSLMode:        "disable",
+				MinConnections: 0,
+				MaxConnections: 10,
+				ConnectTimeout: 5 * time.Second,
+			},
+		},
 		Speech: Speech{
 			Provider: ProviderMock,
 			Mock:     SpeechMock{Transcript: "Prepared mock transcript"},

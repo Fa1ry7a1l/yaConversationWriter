@@ -63,6 +63,52 @@ listeners:
 	}
 }
 
+func TestYAMLSourceLoadsPostgresConfigurationAndSecret(t *testing.T) {
+	path := writeConfig(t, `
+storage:
+  provider: postgres
+  postgres:
+    host: database.internal
+    port: 5433
+    database: meetings
+    user: app
+    password_env: DATABASE_PASSWORD
+    ssl_mode: require
+    min_connections: 1
+    max_connections: 8
+    connect_timeout: 3s
+`)
+	cfg, err := config.NewYAMLSource(path, func(key string) (string, bool) {
+		if key == "DATABASE_PASSWORD" {
+			return "database-secret", true
+		}
+		return "", false
+	}).Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	postgres := cfg.Storage.Postgres
+	if cfg.Storage.Provider != config.ProviderPostgres || postgres.Host != "database.internal" || postgres.Port != 5433 {
+		t.Fatalf("unexpected PostgreSQL config: %+v", postgres)
+	}
+	if postgres.Password != "database-secret" || postgres.ConnectTimeout != 3*time.Second {
+		t.Fatal("PostgreSQL secret or duration was not resolved")
+	}
+}
+
+func TestYAMLSourceRejectsMissingPostgresSecret(t *testing.T) {
+	path := writeConfig(t, `
+storage:
+  provider: postgres
+  postgres:
+    password_env: DATABASE_PASSWORD
+`)
+	_, err := config.NewYAMLSource(path, func(string) (string, bool) { return "", false }).Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_PASSWORD") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestYAMLSourceRejectsMissingSecretWithoutLeakingValues(t *testing.T) {
 	path := writeConfig(t, `
 listeners:
@@ -78,7 +124,7 @@ listeners:
 	}
 
 	secret := "do-not-print-this-secret"
-	invalidPath := writeConfig(t, "storage:\n  provider: unsupported\n")
+	invalidPath := writeConfig(t, "storage:\n  provider: postgres\n  postgres:\n    max_connections: 0\n")
 	_, err = config.NewYAMLSource(invalidPath, func(string) (string, bool) { return secret, true }).Load(context.Background())
 	if err == nil {
 		t.Fatal("Load() error = nil")
@@ -90,16 +136,17 @@ listeners:
 
 func TestYAMLSourceRejectsInvalidConfiguration(t *testing.T) {
 	tests := map[string]string{
-		"unknown field":    "unknown: true\n",
-		"unknown listener": "listeners:\n  - name: x\n    type: http\n    enabled: false\n",
-		"unknown provider": "speech:\n  provider: real\n",
-		"bad duration":     "app:\n  shutdown_timeout: soon\n",
-		"bad limit":        "workers:\n  count: 0\n",
+		"unknown field":     "unknown: true\n",
+		"unknown listener":  "listeners:\n  - name: x\n    type: http\n    enabled: false\n",
+		"unknown provider":  "speech:\n  provider: real\n",
+		"bad duration":      "app:\n  shutdown_timeout: soon\n",
+		"bad limit":         "workers:\n  count: 0\n",
+		"bad postgres pool": "storage:\n  provider: postgres\n  postgres:\n    min_connections: 2\n    max_connections: 1\n",
 	}
 
 	for name, contents := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := config.NewYAMLSource(writeConfig(t, contents), nil).Load(context.Background())
+			_, err := config.NewYAMLSource(writeConfig(t, contents), func(string) (string, bool) { return "test-secret", true }).Load(context.Background())
 			if err == nil {
 				t.Fatal("Load() error = nil")
 			}

@@ -75,6 +75,24 @@ func (r *Repository) GetOrCreateUser(ctx context.Context, externalID string) (do
 	return user, nil
 }
 
+func (r *Repository) GetUserByExternalID(ctx context.Context, externalID string) (domain.User, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.User{}, err
+	}
+	externalID = strings.TrimSpace(externalID)
+	if externalID == "" {
+		return domain.User{}, fmt.Errorf("%w: external user ID is required", domain.ErrInvalidArgument)
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	id, ok := r.userByExternal[externalID]
+	if !ok {
+		return domain.User{}, fmt.Errorf("external user %q: %w", externalID, domain.ErrNotFound)
+	}
+	return r.usersByID[id], nil
+}
+
 func (r *Repository) CreateMeetingWithJob(ctx context.Context, userID domain.UserID, metadata domain.FileMetadata) (domain.Meeting, domain.ProcessingJob, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Meeting{}, domain.ProcessingJob{}, err

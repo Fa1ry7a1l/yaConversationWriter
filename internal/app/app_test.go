@@ -15,6 +15,8 @@ import (
 	llmmock "yaConversationWriter/internal/infrastructure/llm/mock"
 	"yaConversationWriter/internal/infrastructure/repository/memory"
 	speechmock "yaConversationWriter/internal/infrastructure/speech/mock"
+	"yaConversationWriter/internal/ports"
+	"yaConversationWriter/internal/service"
 )
 
 func TestRunStartsAndStopsListenersInLifecycleOrder(t *testing.T) {
@@ -45,6 +47,28 @@ func TestRunStopsAlreadyStartedListenersOnStartFailure(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	want := []string{"start:first", "start:second", "shutdown:first"}
+	if got := recorder.snapshot(); !equalStrings(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+}
+
+func TestRunStopsBackgroundComponentWhenListenerStartFails(t *testing.T) {
+	startErr := errors.New("listener cannot start")
+	recorder := &eventRecorder{}
+	background := &fakeListener{name: "workers", events: recorder}
+	listener := &fakeListener{name: "telegram", events: recorder, startErr: startErr}
+	dependencies := newTestDependencies(t)
+	dependencies.Background = []app.Lifecycle{background}
+	application, err := app.New(testLogger(), time.Second, dependencies, listener)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	err = application.Run(context.Background())
+	if !errors.Is(err, startErr) {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := []string{"start:workers", "start:telegram", "shutdown:workers"}
 	if got := recorder.snapshot(); !equalStrings(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)
 	}
@@ -81,18 +105,49 @@ func TestBuildRejectsEnabledTelegramUntilAdapterIncrement(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesRunnableApplicationWithWorkers(t *testing.T) {
+	application, err := app.Build(config.Default(), testLogger())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if application.Application() == nil {
+		t.Fatal("Build() did not expose the meeting application")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+	if err := application.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
 func newTestApp(t *testing.T, listeners ...app.Listener) *app.App {
 	t.Helper()
-	application, err := app.New(testLogger(), time.Second, app.Dependencies{
-		Repository: memory.New(),
-		Speech:     speechmock.New(speechmock.Config{Transcript: "transcript"}),
-		LLM:        llmmock.New(llmmock.Config{Summary: "summary", Answer: "answer"}),
-	}, listeners...)
+	application, err := app.New(testLogger(), time.Second, newTestDependencies(t), listeners...)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	return application
 }
+
+func newTestDependencies(t *testing.T) app.Dependencies {
+	t.Helper()
+	repository := memory.New()
+	llmClient := llmmock.New(llmmock.Config{Summary: "summary", Answer: "answer"})
+	meetingApplication, err := service.NewMeetings(repository, llmClient, noopDispatcher{}, testLogger())
+	if err != nil {
+		t.Fatalf("NewMeetings() error = %v", err)
+	}
+	return app.Dependencies{
+		Repository:  repository,
+		Speech:      speechmock.New(speechmock.Config{Transcript: "transcript"}),
+		LLM:         llmClient,
+		Application: meetingApplication,
+	}
+}
+
+type noopDispatcher struct{}
+
+func (noopDispatcher) Enqueue(context.Context, ports.ProcessingTask) error { return nil }
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))

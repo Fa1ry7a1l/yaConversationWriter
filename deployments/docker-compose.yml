@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - meeting-notes-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  postgres-test:
+    image: postgres:17-alpine
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-meeting_notes_test}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_TEST_PORT:-5433}:5432"
+    volumes:
+      - meeting-notes-postgres-test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+volumes:
+  meeting-notes-postgres:
+  meeting-notes-postgres-test:

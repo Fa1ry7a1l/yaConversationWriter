@@ -8,6 +8,7 @@ import (
 
 type UserRepository interface {
 	GetOrCreateUser(ctx context.Context, externalID string) (domain.User, error)
+	GetUserByExternalID(ctx context.Context, externalID string) (domain.User, error)
 }
 
 type MeetingRepository interface {
