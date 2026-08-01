@@ -1,0 +1,53 @@
+# Build artifacts
+/bin/
+/build/
+/dist/
+/out/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+
+# Go dependencies and workspaces
+/vendor/
+go.work
+go.work.sum
+
+# IDEs and editors
+/.idea/
+/.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# AI assistants and generated context
+/.agents/
+/.ai/
+/.aider*
+/.claude/
+/.codex/
+/.continue/
+/.cursor/
+/.gemini/
+/.github/copilot-instructions.md
+/.windsurf/
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/.mcp.json
+mcp.json
