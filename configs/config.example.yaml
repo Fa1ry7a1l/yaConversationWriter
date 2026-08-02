@@ -1,7 +1,8 @@
 app:
   shutdown_timeout: 10s
 
-# Telegram listeners are wired in a later increment. Keep them disabled until then.
+# Enable a listener after setting the environment variable named by token_env.
+# Multiple enabled bots share the same application services and storage.
 listeners:
   - name: primary
     type: telegram

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,15 +92,15 @@ func TestRunAttemptsEveryShutdownAndReturnsErrors(t *testing.T) {
 	}
 }
 
-func TestBuildRejectsEnabledTelegramUntilAdapterIncrement(t *testing.T) {
+func TestBuildCreatesEnabledTelegramListener(t *testing.T) {
 	cfg := config.Default()
 	cfg.Listeners = []config.Listener{{Name: "primary", Type: config.ListenerTelegram, Enabled: true, Token: "secret"}}
-	_, err := app.Build(cfg, testLogger())
-	if err == nil || !strings.Contains(err.Error(), "not available") {
+	application, err := app.Build(cfg, testLogger())
+	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if strings.Contains(err.Error(), "secret") {
-		t.Fatalf("Build() leaked a secret: %v", err)
+	if application.Application() == nil {
+		t.Fatal("Build() did not expose the shared meeting application")
 	}
 }
 

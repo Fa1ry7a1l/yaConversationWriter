@@ -9,6 +9,7 @@ import (
 	repositoryfactory "yaConversationWriter/internal/infrastructure/repository"
 	speechfactory "yaConversationWriter/internal/infrastructure/speech"
 	"yaConversationWriter/internal/service"
+	"yaConversationWriter/internal/transport/telegram"
 	"yaConversationWriter/internal/worker"
 )
 
@@ -46,10 +47,16 @@ func Build(cfg config.Config, logger *slog.Logger) (*App, error) {
 		return nil, fmt.Errorf("build meeting application: %w", err)
 	}
 
-	for _, listener := range cfg.Listeners {
-		if listener.Enabled {
-			return nil, fmt.Errorf("listener %q: Telegram adapter is not available in this increment", listener.Name)
+	listeners := make([]Listener, 0, len(cfg.Listeners))
+	for _, listenerConfig := range cfg.Listeners {
+		if !listenerConfig.Enabled {
+			continue
 		}
+		listener, err := telegram.New(listenerConfig.Name, listenerConfig.Token, meetingApplication, logger)
+		if err != nil {
+			return nil, fmt.Errorf("build listener %q: %w", listenerConfig.Name, err)
+		}
+		listeners = append(listeners, listener)
 	}
 
 	return New(logger, cfg.App.ShutdownTimeout, Dependencies{
@@ -58,5 +65,5 @@ func Build(cfg config.Config, logger *slog.Logger) (*App, error) {
 		LLM:         llmClient,
 		Application: meetingApplication,
 		Background:  []Lifecycle{storageLifecycle, workers},
-	})
+	}, listeners...)
 }
