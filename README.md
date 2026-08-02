@@ -46,6 +46,20 @@ Telegram transport построен на `gopkg.in/telebot.v3`, работает
 
 Команды принимаются как с `/`, так и без него. Speech и LLM остаются mock-реализациями; реальные AI API не используются.
 
+## Архитектура
+
+- `internal/transport/telegram` принимает Telegram updates, скачивает файлы и преобразует ответы. Transport зависит только от application-контракта.
+- `internal/service` содержит пользовательские сценарии и обработку встреч.
+- `internal/domain` содержит модели, статусы, переходы и классификацию ошибок.
+- `internal/worker` предоставляет ограниченную очередь и фиксированный пул фоновой обработки.
+- `internal/infrastructure/repository` содержит взаимозаменяемые memory/PostgreSQL repositories.
+- `internal/infrastructure/speech/mock` и `internal/infrastructure/llm/mock` полностью заменяют внешние AI API.
+- `internal/app` собирает зависимости и управляет запуском и graceful shutdown компонентов.
+
+Направление зависимостей идёт от transport/infrastructure к application/domain. Telegram-, telebot- и PostgreSQL-типы не входят в доменные модели.
+
+Основные реализации выбираются в `configs/config.local.yaml` через `storage.provider`, `speech.provider` и `llm.provider`. Секреты указываются только именами environment-переменных (`token_env`, `password_env`).
+
 ## Локальный PostgreSQL
 
 1. Создайте локальный env-файл:
@@ -88,6 +102,7 @@ go run ./cmd/migrate -direction down
 
 ```powershell
 go test ./...
+go test -race ./...
 ```
 
 Интеграционные тесты запускаются отдельно против тестового Compose-профиля. Они применяют миграции и очищают таблицы, поэтому не направляйте `POSTGRES_TEST_DSN` на рабочую базу:
@@ -96,4 +111,10 @@ go test ./...
 docker compose --profile test --env-file deployments/.env -f deployments/docker-compose.yml up -d postgres-test
 $env:POSTGRES_TEST_DSN = "postgres://meeting_notes:change-me-for-local-development@localhost:5433/meeting_notes_test?sslmode=disable"
 go test -tags=integration ./internal/infrastructure/repository/postgres
+```
+
+Integration-набор включает миграции, транзакции, изоляцию пользователей и полный сценарий Telegram handler → application service → worker → PostgreSQL → mock speech/LLM. После тестов контейнер можно остановить без удаления данных:
+
+```powershell
+docker compose --profile test --env-file deployments/.env -f deployments/docker-compose.yml stop postgres-test
 ```

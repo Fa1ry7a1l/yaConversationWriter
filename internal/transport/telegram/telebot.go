@@ -57,7 +57,9 @@ func newTelebotAdapter(token string, logger *slog.Logger) (botAPI, error) {
 		Synchronous: true,
 		Client:      &http.Client{Timeout: telebotHTTPTimeout},
 		OnError: func(err error, _ tele.Context) {
-			logger.Error("telebot handler failed", "error", redact(token, err.Error()))
+			if err != nil {
+				logger.Error("telebot handler failed", "error", redact(token, err.Error()))
+			}
 		},
 	})
 	if err != nil {
