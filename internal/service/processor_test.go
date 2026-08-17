@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"yaConversationWriter/internal/domain"
@@ -96,74 +97,75 @@ func TestProcessorPersistsFailureWithCanceledTaskContext(t *testing.T) {
 }
 
 func TestWorkerTimeoutIsPersistedAsFailed(t *testing.T) {
-	repository, task := processingFixture(t)
-	processor := newProcessor(t, repository,
-		speechmock.New(speechmock.Config{Transcript: "late", Delay: time.Hour}),
-		llmmock.New(llmmock.Config{Summary: "summary"}),
-	)
-	pool, err := worker.New(worker.Config{Count: 1, QueueSize: 1, TaskTimeout: 15 * time.Millisecond}, processor, testLogger())
-	if err != nil {
-		t.Fatalf("worker.New() error = %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := pool.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if err := pool.Enqueue(ctx, task); err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		const taskTimeout = time.Hour
+		repository, task := processingFixture(t)
+		meetingProcessor := newProcessor(t, repository,
+			speechmock.New(speechmock.Config{Transcript: "late", Delay: 2 * taskTimeout}),
+			llmmock.New(llmmock.Config{Summary: "summary"}),
+		)
+		processor := &notifyingProcessor{delegate: meetingProcessor, done: make(chan error, 1)}
+		pool, err := worker.New(worker.Config{Count: 1, QueueSize: 1, TaskTimeout: taskTimeout}, processor, testLogger())
+		if err != nil {
+			t.Fatalf("worker.New() error = %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := pool.Start(ctx); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		if err := pool.Enqueue(ctx, task); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
 
-	deadline := time.Now().Add(time.Second)
-	for {
-		job, getErr := repository.GetJob(context.Background(), task.UserID, task.MeetingID)
-		if getErr == nil && job.Status == domain.StatusFailed {
-			if !strings.Contains(job.Error, "deadline exceeded") {
-				t.Fatalf("failed job error = %q", job.Error)
-			}
-			break
+		if err := <-processor.done; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Process() error = %v", err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("job did not fail before deadline: job=%+v error=%v", job, getErr)
+		synctest.Wait()
+		assertFailedJob(t, repository, task, "deadline exceeded")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+		defer shutdownCancel()
+		if err := pool.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
 		}
-		time.Sleep(time.Millisecond)
-	}
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
-	defer shutdownCancel()
-	if err := pool.Shutdown(shutdownCtx); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
+	})
 }
 
 func TestWorkerShutdownPersistsActiveAndQueuedTasksAsFailed(t *testing.T) {
-	repository, activeTask := processingFixture(t)
-	queuedTask := addMeetingTask(t, repository, activeTask.UserID, "file-2")
-	processor := newProcessor(t, repository,
-		speechmock.New(speechmock.Config{Transcript: "late", Delay: time.Hour}),
-		llmmock.New(llmmock.Config{Summary: "summary"}),
-	)
-	pool, err := worker.New(worker.Config{Count: 1, QueueSize: 2, TaskTimeout: time.Hour}, processor, testLogger())
-	if err != nil {
-		t.Fatalf("worker.New() error = %v", err)
-	}
-	if err := pool.Start(context.Background()); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if err := pool.Enqueue(context.Background(), activeTask); err != nil {
-		t.Fatalf("enqueue active task: %v", err)
-	}
-	waitForStatus(t, repository, activeTask, domain.StatusProcessing)
-	if err := pool.Enqueue(context.Background(), queuedTask); err != nil {
-		t.Fatalf("enqueue queued task: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		repository, activeTask := processingFixture(t)
+		queuedTask := addMeetingTask(t, repository, activeTask.UserID, "file-2")
+		processor := newProcessor(t, repository,
+			speechmock.New(speechmock.Config{Transcript: "late", Delay: time.Hour}),
+			llmmock.New(llmmock.Config{Summary: "summary"}),
+		)
+		pool, err := worker.New(worker.Config{Count: 1, QueueSize: 2, TaskTimeout: time.Hour}, processor, testLogger())
+		if err != nil {
+			t.Fatalf("worker.New() error = %v", err)
+		}
+		if err := pool.Start(context.Background()); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		if err := pool.Enqueue(context.Background(), activeTask); err != nil {
+			t.Fatalf("enqueue active task: %v", err)
+		}
+		synctest.Wait()
+		job, err := repository.GetJob(context.Background(), activeTask.UserID, activeTask.MeetingID)
+		if err != nil || job.Status != domain.StatusProcessing {
+			t.Fatalf("active job=%+v error=%v", job, err)
+		}
+		if err := pool.Enqueue(context.Background(), queuedTask); err != nil {
+			t.Fatalf("enqueue queued task: %v", err)
+		}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := pool.Shutdown(shutdownCtx); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-	assertFailedJob(t, repository, activeTask, "context canceled")
-	assertFailedJob(t, repository, queuedTask, "context canceled")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := pool.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
+		assertFailedJob(t, repository, activeTask, "context canceled")
+		assertFailedJob(t, repository, queuedTask, "context canceled")
+	})
 }
 
 func processingFixture(t *testing.T) (*memory.Repository, ports.ProcessingTask) {
@@ -203,19 +205,15 @@ func addMeetingTask(t *testing.T, repository *memory.Repository, userID domain.U
 	}
 }
 
-func waitForStatus(t *testing.T, repository *memory.Repository, task ports.ProcessingTask, status domain.JobStatus) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		job, err := repository.GetJob(context.Background(), task.UserID, task.MeetingID)
-		if err == nil && job.Status == status {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("job did not reach %s: job=%+v error=%v", status, job, err)
-		}
-		time.Sleep(time.Millisecond)
-	}
+type notifyingProcessor struct {
+	delegate worker.Processor
+	done     chan error
+}
+
+func (p *notifyingProcessor) Process(ctx context.Context, task ports.ProcessingTask) error {
+	err := p.delegate.Process(ctx, task)
+	p.done <- err
+	return err
 }
 
 func newProcessor(t *testing.T, repository ports.ProcessingRepository, speech ports.SpeechClient, llm ports.LLMClient) *service.Processor {

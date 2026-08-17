@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
 	"time"
 
@@ -37,42 +38,23 @@ type App struct {
 	dependencies    Dependencies
 }
 
-func New(logger *slog.Logger, shutdownTimeout time.Duration, dependencies Dependencies, listeners ...Listener) (*App, error) {
-	if logger == nil {
-		return nil, errors.New("logger is required")
+func New(options ...Option[App]) (*App, error) {
+	application := &App{
+		logger:          slog.Default(),
+		shutdownTimeout: 10 * time.Second,
 	}
-	if shutdownTimeout <= 0 {
-		return nil, errors.New("shutdown timeout must be greater than zero")
+	if err := applyOptions(application, options...); err != nil {
+		return nil, err
 	}
-	if dependencies.Repository == nil || dependencies.Speech == nil || dependencies.LLM == nil || dependencies.Application == nil {
-		return nil, errors.New("repository, speech client, LLM client and application service are required")
+	if application.dependencies.Application == nil {
+		return nil, errors.New("application dependencies are required")
 	}
-	for i, component := range dependencies.Background {
-		if component == nil {
-			return nil, fmt.Errorf("background component %d is nil", i)
-		}
-	}
-	for i, listener := range listeners {
-		if listener == nil {
-			return nil, fmt.Errorf("listener %d is nil", i)
-		}
-	}
-
-	return &App{
-		logger:          logger,
-		shutdownTimeout: shutdownTimeout,
-		background:      append([]Lifecycle(nil), dependencies.Background...),
-		listeners:       append([]Listener(nil), listeners...),
-		dependencies:    dependencies,
-	}, nil
+	return application, nil
 }
 
 func (a *App) Run(ctx context.Context) error {
-	components := make([]Lifecycle, 0, len(a.background)+len(a.listeners))
-	components = append(components, a.background...)
-	components = append(components, a.listeners...)
-	started := make([]Lifecycle, 0, len(components))
-	for _, component := range components {
+	started := make([]Lifecycle, 0, len(a.background)+len(a.listeners))
+	for component := range a.components() {
 		a.logger.Info("starting component", "component", component.Name())
 		if err := component.Start(ctx); err != nil {
 			startErr := fmt.Errorf("start component %q: %w", component.Name(), err)
@@ -88,6 +70,18 @@ func (a *App) Run(ctx context.Context) error {
 	<-ctx.Done()
 	a.logger.Info("application shutdown requested")
 	return a.shutdown(started)
+}
+
+func (a *App) components() iter.Seq[Lifecycle] {
+	return func(yield func(Lifecycle) bool) {
+		for _, components := range [][]Lifecycle{a.background, a.listeners} {
+			for _, component := range components {
+				if !yield(component) {
+					return
+				}
+			}
+		}
+	}
 }
 
 func (a *App) shutdown(started []Lifecycle) error {

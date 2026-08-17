@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"yaConversationWriter/internal/domain"
@@ -17,50 +18,46 @@ import (
 )
 
 func TestAsynchronousMeetingFlow(t *testing.T) {
-	repository := memory.New()
-	speechClient := speechmock.New(speechmock.Config{Transcript: "async transcript"})
-	llmClient := llmmock.New(llmmock.Config{Summary: "async summary", Answer: "answer"})
-	processor := newProcessor(t, repository, speechClient, llmClient)
-	pool, err := worker.New(worker.Config{Count: 1, QueueSize: 2, TaskTimeout: time.Second}, processor, testLogger())
-	if err != nil {
-		t.Fatalf("worker.New() error = %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := pool.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	meetings := newMeetings(t, repository, llmClient, pool)
-	upload, err := meetings.UploadMeeting(ctx, ports.UploadMeetingRequest{
-		ExternalUserID: "telegram:owner",
-		File:           domain.FileMetadata{ExternalFileID: "async-file", MIMEType: "audio/ogg"},
-		Content:        []byte("audio"),
+	synctest.Test(t, func(t *testing.T) {
+		repository := memory.New()
+		speechClient := speechmock.New(speechmock.Config{Transcript: "async transcript"})
+		llmClient := llmmock.New(llmmock.Config{Summary: "async summary", Answer: "answer"})
+		processor := newProcessor(t, repository, speechClient, llmClient)
+		pool, err := worker.New(worker.Config{Count: 1, QueueSize: 2, TaskTimeout: time.Second}, processor, testLogger())
+		if err != nil {
+			t.Fatalf("worker.New() error = %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := pool.Start(ctx); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		meetings := newMeetings(t, repository, llmClient, pool)
+		upload, err := meetings.UploadMeeting(ctx, ports.UploadMeetingRequest{
+			ExternalUserID: "telegram:owner",
+			File:           domain.FileMetadata{ExternalFileID: "async-file", MIMEType: "audio/ogg"},
+			Content:        []byte("audio"),
+		})
+		if err != nil || upload.Job.Status != domain.StatusCreated {
+			t.Fatalf("UploadMeeting() result=%+v error=%v", upload, err)
+		}
+
+		synctest.Wait()
+		job, err := meetings.GetStatus(context.Background(), "telegram:owner", upload.Meeting.ID)
+		if err != nil || job.Status != domain.StatusCompleted {
+			t.Fatalf("meeting did not complete: job=%+v error=%v", job, err)
+		}
+		transcript, err := meetings.GetTranscript(context.Background(), "telegram:owner", upload.Meeting.ID)
+		if err != nil || transcript.Text != "async transcript" {
+			t.Fatalf("GetTranscript() transcript=%+v error=%v", transcript, err)
+		}
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+		defer shutdownCancel()
+		if err := pool.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
 	})
-	if err != nil || upload.Job.Status != domain.StatusCreated {
-		t.Fatalf("UploadMeeting() result=%+v error=%v", upload, err)
-	}
-
-	deadline := time.Now().Add(time.Second)
-	for {
-		job, statusErr := meetings.GetStatus(context.Background(), "telegram:owner", upload.Meeting.ID)
-		if statusErr == nil && job.Status == domain.StatusCompleted {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("meeting did not complete: job=%+v error=%v", job, statusErr)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	transcript, err := meetings.GetTranscript(context.Background(), "telegram:owner", upload.Meeting.ID)
-	if err != nil || transcript.Text != "async transcript" {
-		t.Fatalf("GetTranscript() transcript=%+v error=%v", transcript, err)
-	}
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
-	defer shutdownCancel()
-	if err := pool.Shutdown(shutdownCtx); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
 }
 
 func TestMeetingsUploadAndMandatoryUseCases(t *testing.T) {

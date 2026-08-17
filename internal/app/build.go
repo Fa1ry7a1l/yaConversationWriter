@@ -59,11 +59,16 @@ func Build(cfg config.Config, logger *slog.Logger) (*App, error) {
 		listeners = append(listeners, listener)
 	}
 
-	return New(logger, cfg.App.ShutdownTimeout, Dependencies{
-		Repository:  repository,
-		Speech:      speechClient,
-		LLM:         llmClient,
-		Application: meetingApplication,
-		Background:  []Lifecycle{storageLifecycle, workers},
-	}, listeners...)
+	return New(
+		WithLogger(logger),
+		WithShutdownTimeout(cfg.App.ShutdownTimeout),
+		WithDependencies(Dependencies{
+			Repository:  repository,
+			Speech:      speechClient,
+			LLM:         llmClient,
+			Application: meetingApplication,
+			Background:  []Lifecycle{storageLifecycle, workers},
+		}),
+		WithListeners(listeners...),
+	)
 }

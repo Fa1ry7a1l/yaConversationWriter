@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -153,7 +154,7 @@ func (r *Repository) GetJob(ctx context.Context, userID domain.UserID, meetingID
 	if !ok {
 		return domain.ProcessingJob{}, fmt.Errorf("job for meeting %q: %w", meetingID, domain.ErrNotFound)
 	}
-	return cloneJob(job), nil
+	return cloneJob(job)
 }
 
 func (r *Repository) GetTranscript(ctx context.Context, userID domain.UserID, meetingID domain.MeetingID) (domain.Transcript, error) {
@@ -198,7 +199,11 @@ func (r *Repository) ListMeetings(ctx context.Context, userID domain.UserID) ([]
 	records := make([]domain.MeetingRecord, 0)
 	for id, meeting := range r.meetings {
 		if meeting.UserID == userID {
-			records = append(records, r.recordLocked(id))
+			record, err := r.recordLocked(id)
+			if err != nil {
+				return nil, err
+			}
+			records = append(records, record)
 		}
 	}
 	sortRecords(records)
@@ -230,7 +235,11 @@ func (r *Repository) FindMeetings(ctx context.Context, userID domain.UserID, key
 		} else if !containsFold(candidate, keyword) {
 			continue
 		}
-		results = append(results, domain.SearchResult{Record: r.recordLocked(id), Snippet: snippet(candidate)})
+		record, err := r.recordLocked(id)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, domain.SearchResult{Record: record, Snippet: snippet(candidate)})
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return recordLess(results[i].Record, results[j].Record)
@@ -260,10 +269,14 @@ func (r *Repository) SaveTranscript(ctx context.Context, userID domain.UserID, m
 	if err != nil {
 		return domain.Transcript{}, domain.ProcessingJob{}, err
 	}
+	jobCopy, err := cloneJob(job)
+	if err != nil {
+		return domain.Transcript{}, domain.ProcessingJob{}, err
+	}
 	transcript := domain.Transcript{MeetingID: meetingID, Text: text, CreatedAt: now, UpdatedAt: now}
 	r.transcripts[meetingID] = transcript
 	r.jobs[meetingID] = job
-	return transcript, cloneJob(job), nil
+	return transcript, jobCopy, nil
 }
 
 func (r *Repository) SaveSummary(ctx context.Context, userID domain.UserID, meetingID domain.MeetingID, text string) (domain.Summary, domain.ProcessingJob, error) {
@@ -284,10 +297,14 @@ func (r *Repository) SaveSummary(ctx context.Context, userID domain.UserID, meet
 	if err != nil {
 		return domain.Summary{}, domain.ProcessingJob{}, err
 	}
+	jobCopy, err := cloneJob(job)
+	if err != nil {
+		return domain.Summary{}, domain.ProcessingJob{}, err
+	}
 	summary := domain.Summary{MeetingID: meetingID, Text: text, CreatedAt: now, UpdatedAt: now}
 	r.summaries[meetingID] = summary
 	r.jobs[meetingID] = job
-	return summary, cloneJob(job), nil
+	return summary, jobCopy, nil
 }
 
 func (r *Repository) MarkCompleted(ctx context.Context, userID domain.UserID, meetingID domain.MeetingID) (domain.ProcessingJob, error) {
@@ -315,8 +332,12 @@ func (r *Repository) transition(ctx context.Context, userID domain.UserID, meeti
 	if err != nil {
 		return domain.ProcessingJob{}, err
 	}
+	jobCopy, err := cloneJob(job)
+	if err != nil {
+		return domain.ProcessingJob{}, err
+	}
 	r.jobs[meetingID] = job
-	return cloneJob(job), nil
+	return jobCopy, nil
 }
 
 func (r *Repository) ownedMeetingLocked(userID domain.UserID, meetingID domain.MeetingID) (domain.Meeting, error) {
@@ -328,13 +349,17 @@ func (r *Repository) ownedMeetingLocked(userID domain.UserID, meetingID domain.M
 	return meeting, nil
 }
 
-func (r *Repository) recordLocked(meetingID domain.MeetingID) domain.MeetingRecord {
-	record := domain.MeetingRecord{Meeting: r.meetings[meetingID], Job: cloneJob(r.jobs[meetingID])}
+func (r *Repository) recordLocked(meetingID domain.MeetingID) (domain.MeetingRecord, error) {
+	job, err := cloneJob(r.jobs[meetingID])
+	if err != nil {
+		return domain.MeetingRecord{}, err
+	}
+	record := domain.MeetingRecord{Meeting: r.meetings[meetingID], Job: job}
 	if summary, ok := r.summaries[meetingID]; ok {
 		summaryCopy := summary
 		record.Summary = &summaryCopy
 	}
-	return record
+	return record, nil
 }
 
 func (r *Repository) timestamp() time.Time {
@@ -364,16 +389,27 @@ func newID() (string, error) {
 	return hex.EncodeToString(value[:]), nil
 }
 
-func cloneJob(job domain.ProcessingJob) domain.ProcessingJob {
-	if job.StartedAt != nil {
-		value := *job.StartedAt
-		job.StartedAt = &value
+func cloneJob(job domain.ProcessingJob) (domain.ProcessingJob, error) {
+	clone, err := clone(job)
+	if err != nil {
+		return domain.ProcessingJob{}, fmt.Errorf("clone processing job: %w", err)
 	}
-	if job.CompletedAt != nil {
-		value := *job.CompletedAt
-		job.CompletedAt = &value
+	return clone, nil
+}
+
+func clone[T any](value T) (T, error) {
+	serialized, err := json.Marshal(value)
+	if err != nil {
+		var zero T
+		return zero, fmt.Errorf("serialize value: %w", err)
 	}
-	return job
+
+	var result T
+	if err := json.Unmarshal(serialized, &result); err != nil {
+		var zero T
+		return zero, fmt.Errorf("deserialize value: %w", err)
+	}
+	return result, nil
 }
 
 func sortRecords(records []domain.MeetingRecord) {

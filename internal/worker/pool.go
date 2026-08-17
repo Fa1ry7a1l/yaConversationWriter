@@ -144,12 +144,6 @@ func (p *Pool) Shutdown(ctx context.Context) error {
 	case <-done:
 		p.logger.Info("worker pool stopped")
 		return nil
-	default:
-	}
-	select {
-	case <-done:
-		p.logger.Info("worker pool stopped")
-		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("wait for worker pool shutdown: %w", ctx.Err())
 	}

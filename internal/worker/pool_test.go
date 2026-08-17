@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"yaConversationWriter/internal/domain"
@@ -61,25 +62,29 @@ func TestPoolReportsQueueOverflow(t *testing.T) {
 }
 
 func TestPoolAppliesTaskTimeout(t *testing.T) {
-	processor := &contextProcessor{results: make(chan error, 1)}
-	pool := newPool(t, worker.Config{Count: 1, QueueSize: 1, TaskTimeout: 15 * time.Millisecond}, processor)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := pool.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if err := pool.Enqueue(ctx, task("timeout")); err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-	select {
-	case err := <-processor.results:
-		if !errors.Is(err, context.DeadlineExceeded) {
+	synctest.Test(t, func(t *testing.T) {
+		const taskTimeout = time.Hour
+		processor := &contextProcessor{started: make(chan struct{}, 1), results: make(chan error, 1)}
+		pool := newPool(t, worker.Config{Count: 1, QueueSize: 1, TaskTimeout: taskTimeout}, processor)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := pool.Start(ctx); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		if err := pool.Enqueue(ctx, task("timeout")); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
+		waitSignals(t, processor.started, 1)
+
+		startedAt := time.Now()
+		if err := <-processor.results; !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("processor context error = %v", err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("processor did not observe task timeout")
-	}
-	shutdownPool(t, pool)
+		if elapsed := time.Since(startedAt); elapsed != taskTimeout {
+			t.Fatalf("task timeout elapsed after %v, want %v", elapsed, taskTimeout)
+		}
+		shutdownPool(t, pool)
+	})
 }
 
 func TestPoolShutdownCancelsActiveWorkAndRejectsNewTasks(t *testing.T) {

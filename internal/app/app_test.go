@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,6 +35,30 @@ func TestRunStartsAndStopsListenersInLifecycleOrder(t *testing.T) {
 	}
 }
 
+func TestNewValidatesFunctionalOptions(t *testing.T) {
+	dependencies := newTestDependencies(t)
+	tests := []struct {
+		name    string
+		options []app.Option[app.App]
+		want    string
+	}{
+		{name: "missing dependencies", want: "application dependencies are required"},
+		{name: "nil option", options: []app.Option[app.App]{nil}, want: "option 0 is nil"},
+		{name: "nil logger", options: []app.Option[app.App]{app.WithLogger(nil)}, want: "logger is required"},
+		{name: "invalid timeout", options: []app.Option[app.App]{app.WithShutdownTimeout(0)}, want: "shutdown timeout must be greater than zero"},
+		{name: "nil listener", options: []app.Option[app.App]{app.WithDependencies(dependencies), app.WithListeners(nil)}, want: "listener 0 is nil"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := app.New(test.options...)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("New() error = %v, want it to contain %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestRunStopsAlreadyStartedListenersOnStartFailure(t *testing.T) {
 	startErr := errors.New("cannot start")
 	recorder := &eventRecorder{}
@@ -58,7 +83,12 @@ func TestRunStopsBackgroundComponentWhenListenerStartFails(t *testing.T) {
 	listener := &fakeListener{name: "telegram", events: recorder, startErr: startErr}
 	dependencies := newTestDependencies(t)
 	dependencies.Background = []app.Lifecycle{background}
-	application, err := app.New(testLogger(), time.Second, dependencies, listener)
+	application, err := app.New(
+		app.WithLogger(testLogger()),
+		app.WithShutdownTimeout(time.Second),
+		app.WithDependencies(dependencies),
+		app.WithListeners(listener),
+	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -121,7 +151,12 @@ func TestBuildCreatesRunnableApplicationWithWorkers(t *testing.T) {
 
 func newTestApp(t *testing.T, listeners ...app.Listener) *app.App {
 	t.Helper()
-	application, err := app.New(testLogger(), time.Second, newTestDependencies(t), listeners...)
+	application, err := app.New(
+		app.WithLogger(testLogger()),
+		app.WithShutdownTimeout(time.Second),
+		app.WithDependencies(newTestDependencies(t)),
+		app.WithListeners(listeners...),
+	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
