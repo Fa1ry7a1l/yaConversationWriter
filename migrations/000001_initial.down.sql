@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS summaries;
+DROP TABLE IF EXISTS transcripts;
+DROP TABLE IF EXISTS processing_jobs;
+DROP TABLE IF EXISTS meetings;
+DROP TABLE IF EXISTS users;
